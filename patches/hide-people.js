@@ -64,16 +64,25 @@ window.addEventListener('DOMContentLoaded', () => {
       btn = document.createElement('button');
       btn.title = 'Toggle people & Active Now panels';
       Object.assign(btn.style, {
-        marginRight: '6px',
-        padding: '2px 6px',
+        marginRight: '8px',
+        padding: '2px 4px',
         fontSize: '12px',
+        lineHeight: '16px',
+        fontWeight: '500',
         cursor: 'pointer',
         border: 'none',
         borderRadius: '4px',
-        background: 'var(--interactive-normal)'
+        color: 'var(--text-muted)',
+        background: 'transparent'
       });
-      btn.onmouseenter = () => btn.style.background = 'var(--interactive-hover)';
-      btn.onmouseleave = () => btn.style.background = 'var(--interactive-normal)';
+      btn.onmouseenter = () => {
+        btn.style.color = 'var(--text-normal)';
+        btn.style.background = 'var(--background-modifier-hover)';
+      };
+      btn.onmouseleave = () => {
+        btn.style.color = 'var(--text-muted)';
+        btn.style.background = 'transparent';
+      };
       btn.onclick = () => {
         console.log('Toggle button clicked, toggling panels');
         isHidden = !isHidden;
@@ -90,9 +99,8 @@ window.addEventListener('DOMContentLoaded', () => {
       btn.textContent = isHidden ? 'Show' : 'Hide';
     };
     updateButtonText();
-  }
+  };
 
-  // First load
   waitFor(peopleListSelector, () => {
     console.log('People list found (first load)');
     hidePanels();
@@ -105,8 +113,7 @@ window.addEventListener('DOMContentLoaded', () => {
   waitFor(searchBarSelector, () => {
     console.log('Search bar found, inserting toggle button');
     insertToggleButton();
-  })
-
+  });
 
   const root = document.body || document.documentElement;
   if (root) {
