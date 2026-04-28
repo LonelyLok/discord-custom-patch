@@ -1,13 +1,29 @@
 import path from 'path';
 import { readdir, readFile, writeFile, rm } from "fs/promises";
 import fs from 'fs';
-const base = process.env.LOCALAPPDATA;
 import asar from '@electron/asar';
 
+const base = process.env.LOCALAPPDATA;
 const discordPath = path.join(base as string, 'Discord');
 
+type SourceEdit = {
+  name: string;
+  source: string;
+  patches?: string[];
+  replacements?: Array<{
+    from: RegExp;
+    to: string;
+  }>;
+};
+
+type ArchivePatch = {
+  name: string;
+  asarDir: string;
+  asarFile: string;
+  edits: SourceEdit[];
+};
+
 function getLatestDiscordApp(versions: string[]): string {
-  // Helper to turn "app-1.0.9199" → [1,0,9199]
   const toNums = (v: string) =>
     v
       .replace(/^app-/, "")
@@ -23,33 +39,79 @@ function getLatestDiscordApp(versions: string[]): string {
       if (nb > na) return curr;
       if (nb < na) return latest;
     }
-    return latest; // they’re equal
+    return latest;
   });
 }
 
 async function listFolders(dirPath: string) {
   try {
-    // withFileTypes: gives you Dirent objects you can query
     const entries = await readdir(dirPath, { withFileTypes: true });
-    const folders = entries
+    return entries
       .filter(ent => ent.isDirectory())
       .map(ent => ent.name);
-    return folders;
   } catch (err) {
     console.error("Error reading directory:", err);
     return [];
   }
 }
 
-const customs = [
+const archives: ArchivePatch[] = [
   {
-    name: "Hide People",
-    patch: './patches/hide-people.js',
+    name: "Desktop Core",
     asarDir: 'modules/discord_desktop_core-1/discord_desktop_core',
     asarFile: 'core.asar',
-    source: 'app/mainScreenPreload.js'
+    edits: [
+      {
+        name: "Desktop Core Preload Patches",
+        source: 'app/mainScreenPreload.js',
+        patches: [
+          './patches/hide-people.js',
+          './patches/popout-test.js'
+        ]
+      },
+      {
+        name: "Channel Window Main",
+        source: 'app/mainScreen.js',
+        patches: [
+          './patches/channel-window-main.js'
+        ]
+      }
+    ]
   }
 ];
+
+async function applyEdit(outDir: string, edit: SourceEdit) {
+  const sourcePath = path.join(outDir, edit.source);
+  let patchedCode = await readFile(sourcePath, "utf-8");
+
+  if (edit.replacements?.length) {
+    for (const replacement of edit.replacements) {
+      if (!replacement.from.test(patchedCode)) {
+        throw new Error(`Replacement target not found for ${edit.name}`);
+      }
+      patchedCode = patchedCode.replace(replacement.from, replacement.to);
+    }
+  }
+
+  if (edit.patches?.length) {
+    const patchBlocks = await Promise.all(
+      edit.patches.map(async (patchPath) => {
+        const patchCode = await readFile(patchPath, "utf-8");
+        return [
+          "",
+          "",
+          "// CUSTOM PATCH START",
+          patchCode,
+          "// CUSTOM PATCH END"
+        ].join("\n");
+      })
+    );
+
+    patchedCode += patchBlocks.join("");
+  }
+
+  await writeFile(sourcePath, patchedCode, "utf-8");
+}
 
 (async () => {
   try {
@@ -57,46 +119,32 @@ const customs = [
     const latest = getLatestDiscordApp(folders);
     console.log("Latest Discord App Version:", latest);
 
-    for (const custom of customs) {
-      const { asarDir, asarFile } = custom;
-      const archivePath = path.join(discordPath, latest, asarDir, asarFile);
+    for (const archive of archives) {
+      const archivePath = path.join(discordPath, latest, archive.asarDir, archive.asarFile);
 
-      const isFileExist = fs.existsSync(archivePath)
-
-      if (!isFileExist) {
+      if (!fs.existsSync(archivePath)) {
         console.error(`Archive not found: ${archivePath}`);
-        continue
+        continue;
       }
 
       const fileName = path.basename(archivePath);
-
-
-      const backupName = `${Date.now()}_${fileName}`; // e.g. "core_2025-07-13T15-24-30Z.asar"
-      const backupPath = path.join(discordPath, latest, asarDir, backupName);
-
-      // 5) Copy synchronously (or use fs.copyFile for async)
-      fs.copyFileSync(archivePath, backupPath);
-
+      const backupName = `${Date.now()}_${fileName}`;
+      const backupPath = path.join(discordPath, latest, archive.asarDir, backupName);
       const outDir = './temp_unpacked';
+
+      fs.copyFileSync(archivePath, backupPath);
       await asar.extractAll(archivePath, outDir);
 
-      const sourcePath = path.join(outDir, custom.source);
-      const sourceCode = await readFile(sourcePath, "utf-8");
-
-      const patchCode = await readFile(custom.patch, "utf-8");
-
-      const patchedCode = sourceCode + "\n\n// ── CUSTOM PATCH START ──\n"
-        + patchCode
-        + "\n// ── CUSTOM PATCH END ──\n";
-
-      await writeFile(sourcePath, patchedCode, "utf-8");
+      for (const edit of archive.edits) {
+        await applyEdit(outDir, edit);
+        console.log(`Applied ${edit.name} in ${latest}`);
+      }
 
       await asar.createPackage(outDir, archivePath);
-
-      console.log(`Patched ${custom.name} in ${latest}`);
+      console.log(`Patched ${archive.name} in ${latest}`);
 
       await rm(outDir, { recursive: true, force: true });
-      console.log(`Cleaned up temporary files for ${custom.name}`);
+      console.log(`Cleaned up temporary files for ${archive.name}`);
     }
   } catch (err) {
     console.error(err);

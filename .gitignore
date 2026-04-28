@@ -2,3 +2,5 @@
 node_modules/
 dist/
 *.txt
+temp_unpack/
+temp_unpacked/
